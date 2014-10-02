@@ -1,8 +1,9 @@
 /*
    PossumDuino - wearable datalogging
-   
+
    by Arjen Lentz & Jonathan Oxer
    - 2014-08-30 first full prototype assembly
+   - 2014-10-01 live prototype tested
 
   This program is free software: you can redistribute it and/or modify
   it under the terms of the GNU General Public License as published by
@@ -49,8 +50,8 @@
 
 void sendDataToProcessing(char symbol, int data)
 {
-    Serial.print(symbol);                // symbol prefix tells Processing what type of data is coming
-    Serial.println(data);                // the data to send culminating in a carriage return
+  Serial.print(symbol);                // symbol prefix tells Processing what type of data is coming
+  Serial.println(data);                // the data to send culminating in a carriage return
 }
 
 
@@ -103,17 +104,17 @@ File dataFile;
 // ----------------------------------------
 // Main stuff
 
-void setup(){
+void setup() {
   Serial.begin(9600);
 
   Serial.println();
   Serial.println("PossumDuino");
 
   // PulseSensor
-  PulseSensorInterruptSetup();                 // sets up to read Pulse Sensor signal every 2mS 
-   // UN-COMMENT THE NEXT LINE IF YOU ARE POWERING The Pulse Sensor AT LOW VOLTAGE, 
-   // AND APPLY THAT VOLTAGE TO THE A-REF PIN
-   //analogReference(EXTERNAL);
+  PulseSensorInterruptSetup();                 // sets up to read Pulse Sensor signal every 2mS
+  // UN-COMMENT THE NEXT LINE IF YOU ARE POWERING The Pulse Sensor AT LOW VOLTAGE,
+  // AND APPLY THAT VOLTAGE TO THE A-REF PIN
+  //analogReference(EXTERNAL);
 
   // SPI for RTC/temp
   Wire.begin();
@@ -129,89 +130,105 @@ void setup(){
     Serial.println("SD card failed, or not present");
   }
 
-
+  delay(5000);  // sleep for a bit to get everything settled
 }
 
 
 
 void loop()
 {
+  // ----------------------------------------
+  // RTC
+
+  Wire.beginTransmission(DS3232_I2C_ADDRESS);
+  Wire.write(0); // set DS3232 register pointer to 00h
+  Wire.endTransmission();
+  Wire.requestFrom(DS3232_I2C_ADDRESS, 7);
+
+  String date_str = "20", time_str;
+
+  {
+    byte second, minute, hour, dayofweek, day, month, year;
+
+    second     = bcdToDec(Wire.read() & 0x7f);
+    minute     = bcdToDec(Wire.read());
+    hour       = bcdToDec(Wire.read() & 0x3f);
+    dayofweek  = bcdToDec(Wire.read());
+    day        = bcdToDec(Wire.read());
+    month      = bcdToDec(Wire.read());
+    year       = bcdToDec(Wire.read());
+
+    date_str += Dec2s(year);
+    date_str += '-';
+    date_str += Dec2s(month);
+    date_str += '-';
+    date_str += Dec2s(day);
+
+    time_str = Dec2s(hour);
+    time_str += ':';
+    time_str += Dec2s(minute);
+    time_str += ':';
+    time_str += Dec2s(second);
+
+    Serial.print("RTC  ");
+    Serial.print(date_str);
+    Serial.print(' ');
+    Serial.println(time_str);
+  }
+
+
   // PulseSensor
-  if (PulseSensorGetQS() == true){         // Quantified Self flag is true when arduino finds a heartbeat
-    // ----------------------------------------
-    // RTC
+  int bpm;
 
-    Wire.beginTransmission(DS3232_I2C_ADDRESS);
-    Wire.write(0); // set DS3232 register pointer to 00h
-    Wire.endTransmission();
-    Wire.requestFrom(DS3232_I2C_ADDRESS, 7);
+  if (PulseSensorGetQS() == true) {        // Quantified Self flag is true when arduino finds a heartbeat
+    bpm = PulseSensorGetBPM();
+    // sanity for junk readings
+    if (bpm > 20 && bpm < 180)
+      sendDataToProcessing('B', bpm);
+    else
+      bpm = -1;  // bad signal
+  }
+  else
+    bpm = -2;  // no signal
 
-    String date_str = "20", time_str;
 
-    {
-      byte second, minute, hour, dayofweek, day, month, year;
+  // Accelerometer
+  int XaxisValue, YaxisValue, ZaxisValue;
 
-      second     = bcdToDec(Wire.read() & 0x7f);
-      minute     = bcdToDec(Wire.read());
-      hour       = bcdToDec(Wire.read() & 0x3f);
-      dayofweek  = bcdToDec(Wire.read());
-      day        = bcdToDec(Wire.read());
-      month      = bcdToDec(Wire.read());
-      year       = bcdToDec(Wire.read());
-
-      date_str += Dec2s(year);
-      date_str += '-';
-      date_str += Dec2s(month);
-      date_str += '-';
-      date_str += Dec2s(day);
-
-      time_str = Dec2s(hour);
-      time_str += ':';
-      time_str += Dec2s(minute);
-      time_str += ':';
-      time_str += Dec2s(second);
-
-      Serial.print("RTC  ");
-      Serial.print(date_str);
-      Serial.print(' ');
-      Serial.println(time_str);
-    }
-
-  int axisValue;
-
-  axisValue = analogRead(xAxis);    
+  XaxisValue = analogRead(xAxis);
+  YaxisValue = analogRead(yAxis);
+  ZaxisValue = analogRead(zAxis);
   Serial.print("X=");
-  Serial.print(axisValue);
-  
-  axisValue = analogRead(yAxis);    
+  Serial.print(XaxisValue);
   Serial.print(",Y=");
-  Serial.print(axisValue);
-  
-  axisValue = analogRead(zAxis);    
+  Serial.print(YaxisValue);
   Serial.print(",Z=");
-  Serial.println(axisValue);
-  
+  Serial.println(ZaxisValue);
 
 
-        sendDataToProcessing('B',PulseSensorGetBPM());   // send heart rate with a 'B' prefix
-        
-        
-        
-#if 0
-        // SD
-        dataFile = SD.open("DATALOG.CSV", FILE_WRITE);
-        if (dataFile) {
-          dataFile.println(...);
-          dataFile.close();
-        }
-        else
-          Serial.println("! Can't write to SD file DATALOG.CSV");
-#endif
+  // SD
+  dataFile = SD.open("DATALOG.CSV", FILE_WRITE);
+  if (dataFile) {
+    dataFile.print("PD1,\"");
+    dataFile.print(date_str);
+    dataFile.print(" ");
+    dataFile.print(time_str);
+    dataFile.print("\",");
+    dataFile.print(bpm);
+    dataFile.print(",");
+    dataFile.print(XaxisValue);
+    dataFile.print(",");
+    dataFile.print(YaxisValue);
+    dataFile.print(",");
+    dataFile.print(ZaxisValue);
+    dataFile.println();
 
-     }
-  
-  delay(20);                             //  take a break
+    dataFile.close();
+  }
+  else
+    Serial.println("! Can't write to SD file DATALOG.CSV");
 
+  delay(5000);                             //  take a break
 
 }
 
